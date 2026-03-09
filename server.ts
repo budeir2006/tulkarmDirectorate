@@ -1,12 +1,11 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import Database from 'better-sqlite3';
 import path from 'path';
+import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const db = new Database('schools.db');
+const db = new Database('database.sqlite');
 
 // Initialize DB
 db.exec(`
@@ -15,36 +14,75 @@ db.exec(`
     name TEXT NOT NULL UNIQUE
   );
 
-  DROP TABLE IF EXISTS submissions;
-  CREATE TABLE submissions (
+  CREATE TABLE IF NOT EXISTS forms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    school_id INTEGER NOT NULL UNIQUE,
-    report_date TEXT NOT NULL,
-    attendance_type TEXT NOT NULL,
-    executed_classes INTEGER DEFAULT 0,
-    executed_classes_online INTEGER DEFAULT 0,
-    executed_classes_offline INTEGER DEFAULT 0,
-    total_students INTEGER DEFAULT 0,
-    absent_students_offline INTEGER DEFAULT 0,
-    absent_students_online INTEGER DEFAULT 0,
-    total_teachers INTEGER DEFAULT 0,
-    core_teachers INTEGER DEFAULT 0,
-    absent_teachers INTEGER DEFAULT 0,
-    challenges_offline TEXT,
-    challenges_online TEXT,
-    challenges_blended TEXT,
+    title TEXT NOT NULL,
+    description TEXT,
+    start_time DATETIME,
+    end_time DATETIME,
+    is_active INTEGER DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS form_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    form_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    type TEXT NOT NULL,
+    is_required INTEGER DEFAULT 1,
+    options TEXT,
+    order_index INTEGER DEFAULT 0,
+    FOREIGN KEY(form_id) REFERENCES forms(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS form_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    form_id INTEGER NOT NULL,
+    school_id INTEGER NOT NULL,
     submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE
+    FOREIGN KEY(form_id) REFERENCES forms(id) ON DELETE CASCADE,
+    FOREIGN KEY(school_id) REFERENCES schools(id) ON DELETE CASCADE,
+    UNIQUE(form_id, school_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS form_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    response_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    answer_value TEXT,
+    FOREIGN KEY(response_id) REFERENCES form_responses(id) ON DELETE CASCADE,
+    FOREIGN KEY(question_id) REFERENCES form_questions(id) ON DELETE CASCADE
   );
 `);
 
-// Insert some initial data if empty
-const count = db.prepare('SELECT COUNT(*) as c FROM schools').get() as { c: number };
-if (count.c === 0) {
-  const insertSchool = db.prepare('INSERT INTO schools (name) VALUES (?)');
-  insertSchool.run('مدرسة عمر بن الخطاب');
-  insertSchool.run('مدرسة عتيل الأساسية');
-  insertSchool.run('مدرسة ياسر عرفات');
+// Seed default form if not exists
+const formCount = db.prepare('SELECT COUNT(*) as c FROM forms').get() as { c: number };
+if (formCount.c === 0) {
+  const insertForm = db.prepare('INSERT INTO forms (title, description) VALUES (?, ?)');
+  const info = insertForm.run('نموذج المتابعة اليومي', 'يرجى تعبئة البيانات اليومية بدقة');
+  const formId = info.lastInsertRowid;
+
+  const insertQ = db.prepare('INSERT INTO form_questions (form_id, title, type, is_required, options, order_index) VALUES (?, ?, ?, ?, ?, ?)');
+  
+  const defaultQuestions = [
+    { title: 'اليوم والتاريخ', type: 'date', req: 1, opt: null },
+    { title: 'طبيعة الدوام', type: 'select', req: 1, opt: JSON.stringify(['وجاهي', 'إلكتروني', 'مدمج']) },
+    { title: 'عدد الحصص المنفذة', type: 'number', req: 1, opt: null },
+    { title: 'عدد الحصص الإلكترونية', type: 'number', req: 0, opt: null },
+    { title: 'عدد الحصص الوجاهية', type: 'number', req: 0, opt: null },
+    { title: 'عدد طلاب المدرسة', type: 'number', req: 1, opt: null },
+    { title: 'الطلاب الغائبين (وجاهي)', type: 'number', req: 1, opt: null },
+    { title: 'الطلاب الغائبين (إلكتروني)', type: 'number', req: 1, opt: null },
+    { title: 'عدد معلمي المدرسة', type: 'number', req: 1, opt: null },
+    { title: 'معلمي المواد الأساسية', type: 'number', req: 1, opt: null },
+    { title: 'المعلمين الغائبين', type: 'number', req: 1, opt: null },
+    { title: 'أبرز الصعوبات التي تواجه التعليم الوجاهي', type: 'textarea', req: 0, opt: null },
+    { title: 'أبرز الصعوبات التي تواجه التعليم الإلكتروني', type: 'textarea', req: 0, opt: null },
+    { title: 'أبرز الصعوبات التي تواجه التعليم المدمج', type: 'textarea', req: 0, opt: null },
+  ];
+
+  defaultQuestions.forEach((q, idx) => {
+    insertQ.run(formId, q.title, q.type, q.req, q.opt, idx);
+  });
 }
 
 async function startServer() {
@@ -53,91 +91,60 @@ async function startServer() {
 
   app.use(express.json());
 
-  // API Routes
-  
-  // Get all schools with submission status
+  // Get all schools with submission status for active form
   app.get('/api/schools', (req, res) => {
+    const activeForm = db.prepare('SELECT id FROM forms WHERE is_active = 1 LIMIT 1').get() as { id: number } | undefined;
+    const formId = activeForm ? activeForm.id : 0;
+
     const schools = db.prepare(`
       SELECT s.id, s.name, 
-             CASE WHEN sub.id IS NOT NULL THEN 1 ELSE 0 END as has_submitted
+             CASE WHEN fr.id IS NOT NULL THEN 1 ELSE 0 END as has_submitted
       FROM schools s
-      LEFT JOIN submissions sub ON s.id = sub.school_id
+      LEFT JOIN form_responses fr ON s.id = fr.school_id AND fr.form_id = ?
       ORDER BY s.name ASC
-    `).all();
+    `).all(formId);
     res.json(schools);
   });
 
-  // Get a specific school
-  app.get('/api/schools/:id', (req, res) => {
+  // Get form for a specific school
+  app.get('/api/schools/:id/form', (req, res) => {
     const school = db.prepare('SELECT * FROM schools WHERE id = ?').get(req.params.id);
     if (!school) return res.status(404).json({ error: 'School not found' });
     
-    const submission = db.prepare('SELECT * FROM submissions WHERE school_id = ?').get(req.params.id);
-    res.json({ school, submission });
+    const form = db.prepare('SELECT * FROM forms WHERE is_active = 1 LIMIT 1').get() as any;
+    if (!form) return res.json({ school, form: null });
+
+    const questions = db.prepare('SELECT * FROM form_questions WHERE form_id = ? ORDER BY order_index ASC').all(form.id);
+    
+    const response = db.prepare('SELECT id FROM form_responses WHERE form_id = ? AND school_id = ?').get(form.id, req.params.id) as any;
+    let answers = [];
+    if (response) {
+      answers = db.prepare('SELECT question_id, answer_value FROM form_answers WHERE response_id = ?').all(response.id);
+    }
+
+    res.json({ school, form, questions, answers });
   });
 
   // Submit form for a school
-  app.post('/api/schools/:id/submit', (req, res) => {
+  app.post('/api/schools/:id/form', (req, res) => {
     const schoolId = req.params.id;
-    const {
-      report_date,
-      attendance_type,
-      executed_classes,
-      executed_classes_online,
-      executed_classes_offline,
-      total_students,
-      absent_students_offline,
-      absent_students_online,
-      total_teachers,
-      core_teachers,
-      absent_teachers,
-      challenges_offline,
-      challenges_online,
-      challenges_blended
-    } = req.body;
+    const { form_id, answers } = req.body;
 
     try {
-      db.prepare(`
-        INSERT INTO submissions (
-          school_id, report_date, attendance_type, executed_classes, executed_classes_online, executed_classes_offline,
-          total_students, absent_students_offline, absent_students_online,
-          total_teachers, core_teachers, absent_teachers,
-          challenges_offline, challenges_online, challenges_blended
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(school_id) DO UPDATE SET
-          report_date=excluded.report_date,
-          attendance_type=excluded.attendance_type,
-          executed_classes=excluded.executed_classes,
-          executed_classes_online=excluded.executed_classes_online,
-          executed_classes_offline=excluded.executed_classes_offline,
-          total_students=excluded.total_students,
-          absent_students_offline=excluded.absent_students_offline,
-          absent_students_online=excluded.absent_students_online,
-          total_teachers=excluded.total_teachers,
-          core_teachers=excluded.core_teachers,
-          absent_teachers=excluded.absent_teachers,
-          challenges_offline=excluded.challenges_offline,
-          challenges_online=excluded.challenges_online,
-          challenges_blended=excluded.challenges_blended,
-          submitted_at=CURRENT_TIMESTAMP
-      `).run(
-        schoolId, 
-        report_date,
-        attendance_type,
-        executed_classes || 0,
-        executed_classes_online || 0,
-        executed_classes_offline || 0,
-        total_students || 0,
-        absent_students_offline || 0,
-        absent_students_online || 0,
-        total_teachers || 0,
-        core_teachers || 0,
-        absent_teachers || 0,
-        challenges_offline || '',
-        challenges_online || '',
-        challenges_blended || ''
-      );
+      const insertResponse = db.prepare('INSERT INTO form_responses (form_id, school_id) VALUES (?, ?) ON CONFLICT(form_id, school_id) DO UPDATE SET submitted_at = CURRENT_TIMESTAMP RETURNING id');
+      const response = insertResponse.get(form_id, schoolId) as { id: number };
+      
+      const deleteAnswers = db.prepare('DELETE FROM form_answers WHERE response_id = ?');
+      deleteAnswers.run(response.id);
+
+      const insertAnswer = db.prepare('INSERT INTO form_answers (response_id, question_id, answer_value) VALUES (?, ?, ?)');
+      const insertMany = db.transaction((ansObj) => {
+        for (const [qId, val] of Object.entries(ansObj)) {
+          insertAnswer.run(response.id, qId, String(val));
+        }
+      });
+      insertMany(answers);
+
       res.json({ success: true });
     } catch (error) {
       console.error(error);
@@ -208,45 +215,100 @@ async function startServer() {
     }
   });
 
+  // Admin: Get Form
+  app.get('/api/admin/form', (req, res) => {
+    const form = db.prepare('SELECT * FROM forms WHERE is_active = 1 LIMIT 1').get() as any;
+    if (!form) return res.json(null);
+    const questions = db.prepare('SELECT * FROM form_questions WHERE form_id = ? ORDER BY order_index ASC').all(form.id);
+    res.json({ ...form, questions });
+  });
+
+  // Admin: Save Form
+  app.put('/api/admin/form', (req, res) => {
+    const { id, title, description, start_time, end_time, questions } = req.body;
+    try {
+      db.transaction(() => {
+        let currentFormId = id;
+        if (id) {
+          db.prepare('UPDATE forms SET title = ?, description = ?, start_time = ?, end_time = ? WHERE id = ?')
+            .run(title, description, start_time, end_time, id);
+          
+          const existingQs = db.prepare('SELECT id FROM form_questions WHERE form_id = ?').all(id) as {id:number}[];
+          const newQIds = questions.map((q:any) => q.id).filter(Boolean);
+          const toDelete = existingQs.filter(q => !newQIds.includes(q.id));
+          
+          const delStmt = db.prepare('DELETE FROM form_questions WHERE id = ?');
+          toDelete.forEach(q => delStmt.run(q.id));
+
+          const updateQ = db.prepare('UPDATE form_questions SET title=?, type=?, is_required=?, options=?, order_index=? WHERE id=?');
+          const insertQ = db.prepare('INSERT INTO form_questions (form_id, title, type, is_required, options, order_index) VALUES (?, ?, ?, ?, ?, ?)');
+
+          questions.forEach((q:any, idx:number) => {
+            if (q.id) {
+              updateQ.run(q.title, q.type, q.is_required ? 1 : 0, q.options ? JSON.stringify(q.options) : null, idx, q.id);
+            } else {
+              insertQ.run(id, q.title, q.type, q.is_required ? 1 : 0, q.options ? JSON.stringify(q.options) : null, idx);
+            }
+          });
+        } else {
+          db.prepare('UPDATE forms SET is_active = 0').run();
+          const info = db.prepare('INSERT INTO forms (title, description, start_time, end_time, is_active) VALUES (?, ?, ?, ?, 1)')
+            .run(title, description, start_time, end_time);
+          currentFormId = info.lastInsertRowid;
+          const insertQ = db.prepare('INSERT INTO form_questions (form_id, title, type, is_required, options, order_index) VALUES (?, ?, ?, ?, ?, ?)');
+          questions.forEach((q:any, idx:number) => {
+            insertQ.run(currentFormId, q.title, q.type, q.is_required ? 1 : 0, q.options ? JSON.stringify(q.options) : null, idx);
+          });
+        }
+      })();
+      res.json({ success: true });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Failed to save form' });
+    }
+  });
+
   // Admin: Get Report/Infographic Data
   app.get('/api/admin/stats', (req, res) => {
+    const activeForm = db.prepare('SELECT id, title FROM forms WHERE is_active = 1 LIMIT 1').get() as { id: number, title: string } | undefined;
+    if (!activeForm) return res.json({ total_schools: 0, submitted_schools: 0, commitment_percentage: 0, number_stats: [], excel_data: [] });
+
+    const formId = activeForm.id;
     const totalSchools = db.prepare('SELECT COUNT(*) as c FROM schools').get() as { c: number };
-    const submittedSchools = db.prepare('SELECT COUNT(*) as c FROM submissions').get() as { c: number };
+    const submittedSchools = db.prepare('SELECT COUNT(*) as c FROM form_responses WHERE form_id = ?').get(formId) as { c: number };
     
-    const stats = db.prepare(`
-      SELECT 
-        SUM(total_students) as all_students,
-        SUM(absent_students_offline) as absent_students_offline,
-        SUM(absent_students_online) as absent_students_online,
-        SUM(total_teachers) as all_teachers,
-        SUM(absent_teachers) as absent_teachers,
-        SUM(executed_classes) as total_classes,
-        SUM(executed_classes_online) as total_classes_online,
-        SUM(executed_classes_offline) as total_classes_offline
-      FROM submissions
-    `).get() as any;
+    const numberQuestions = db.prepare('SELECT id, title FROM form_questions WHERE form_id = ? AND type = "number" ORDER BY order_index').all(formId) as {id:number, title:string}[];
+    
+    const number_stats = numberQuestions.map(q => {
+      const sum = db.prepare('SELECT SUM(CAST(answer_value AS numeric)) as s FROM form_answers fa JOIN form_responses fr ON fa.response_id = fr.id WHERE fr.form_id = ? AND fa.question_id = ?').get(formId, q.id) as { s: number };
+      return { title: q.title, sum: sum.s || 0 };
+    });
 
-    const all_students = stats.all_students || 0;
-    const total_absent_students = (stats.absent_students_offline || 0) + (stats.absent_students_online || 0);
-    const student_attendance_percentage = all_students > 0 
-      ? Math.round(((all_students - total_absent_students) / all_students) * 100) 
-      : 0;
+    const allQuestions = db.prepare('SELECT id, title FROM form_questions WHERE form_id = ? ORDER BY order_index').all(formId) as {id:number, title:string}[];
+    const responses = db.prepare(`
+      SELECT fr.id, s.name as school_name, fr.submitted_at 
+      FROM form_responses fr 
+      JOIN schools s ON fr.school_id = s.id 
+      WHERE fr.form_id = ?
+    `).all(formId) as any[];
 
-    const all_teachers = stats.all_teachers || 0;
-    const total_absent_teachers = stats.absent_teachers || 0;
-    const teacher_attendance_percentage = all_teachers > 0 
-      ? Math.round(((all_teachers - total_absent_teachers) / all_teachers) * 100) 
-      : 0;
+    const excel_data = responses.map(r => {
+      const row: any = { 'المدرسة': r.school_name, 'تاريخ التقديم': r.submitted_at };
+      const answers = db.prepare('SELECT question_id, answer_value FROM form_answers WHERE response_id = ?').all(r.id) as any[];
+      allQuestions.forEach(q => {
+        const ans = answers.find(a => a.question_id === q.id);
+        row[q.title] = ans ? ans.answer_value : '';
+      });
+      return row;
+    });
 
     res.json({
+      form_title: activeForm.title,
       total_schools: totalSchools.c,
       submitted_schools: submittedSchools.c,
       commitment_percentage: totalSchools.c > 0 ? Math.round((submittedSchools.c / totalSchools.c) * 100) : 0,
-      student_attendance_percentage,
-      teacher_attendance_percentage,
-      total_students: all_students,
-      total_teachers: all_teachers,
-      total_classes: (stats.total_classes || 0) + (stats.total_classes_online || 0) + (stats.total_classes_offline || 0)
+      number_stats,
+      excel_data
     });
   });
 

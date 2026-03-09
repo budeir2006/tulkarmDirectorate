@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, Plus, Trash2, Edit2, BarChart3, Settings, Users, BookOpen, Building2, CheckCircle2, Download, FileSpreadsheet, Upload } from 'lucide-react';
+import { LogOut, Plus, Trash2, Edit2, BarChart3, Settings, Users, BookOpen, Building2, CheckCircle2, Download, FileSpreadsheet, Upload, FileEdit, Save, GripVertical } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
@@ -13,25 +13,50 @@ interface School {
 }
 
 interface Stats {
+  form_title: string;
   total_schools: number;
   submitted_schools: number;
   commitment_percentage: number;
-  student_attendance_percentage: number;
-  teacher_attendance_percentage: number;
-  total_students: number;
-  total_teachers: number;
-  total_classes: number;
+  number_stats: { title: string; sum: number }[];
+  excel_data: any[];
+}
+
+interface Question {
+  id?: number;
+  title: string;
+  type: string;
+  is_required: boolean;
+  options?: string[];
+}
+
+interface FormConfig {
+  id?: number;
+  title: string;
+  description: string;
+  start_time: string;
+  end_time: string;
+  questions: Question[];
 }
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'schools' | 'reports'>('reports');
+  const [activeTab, setActiveTab] = useState<'reports' | 'schools' | 'form'>('reports');
   const [schools, setSchools] = useState<School[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
   const [newSchoolName, setNewSchoolName] = useState('');
   const [editingSchool, setEditingSchool] = useState<{ id: number; name: string } | null>(null);
   const infographicRef = useRef<HTMLDivElement>(null);
+
+  // Form Builder State
+  const [formConfig, setFormConfig] = useState<FormConfig>({
+    title: '',
+    description: '',
+    start_time: '',
+    end_time: '',
+    questions: []
+  });
+  const [savingForm, setSavingForm] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('admin_token');
@@ -45,14 +70,34 @@ export default function AdminDashboard() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [schoolsRes, statsRes] = await Promise.all([
+      const [schoolsRes, statsRes, formRes] = await Promise.all([
         fetch('/api/schools'),
-        fetch('/api/admin/stats')
+        fetch('/api/admin/stats'),
+        fetch('/api/admin/form')
       ]);
       const schoolsData = await schoolsRes.json();
       const statsData = await statsRes.json();
+      const formData = await formRes.json();
+      
       setSchools(schoolsData);
       setStats(statsData);
+      
+      if (formData) {
+        setFormConfig({
+          id: formData.id,
+          title: formData.title || '',
+          description: formData.description || '',
+          start_time: formData.start_time ? formData.start_time.substring(0, 16) : '',
+          end_time: formData.end_time ? formData.end_time.substring(0, 16) : '',
+          questions: formData.questions.map((q: any) => ({
+            id: q.id,
+            title: q.title,
+            type: q.type,
+            is_required: q.is_required === 1,
+            options: q.options ? JSON.parse(q.options) : []
+          }))
+        });
+      }
     } catch (error) {
       console.error(error);
     } finally {
@@ -65,10 +110,10 @@ export default function AdminDashboard() {
     navigate('/');
   };
 
+  // --- School Management ---
   const handleAddSchool = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSchoolName.trim()) return;
-    
     try {
       const res = await fetch('/api/admin/schools', {
         method: 'POST',
@@ -97,7 +142,6 @@ export default function AdminDashboard() {
   const handleEditSchool = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingSchool || !editingSchool.name.trim()) return;
-    
     try {
       const res = await fetch(`/api/admin/schools/${editingSchool.id}`, {
         method: 'PUT',
@@ -116,7 +160,6 @@ export default function AdminDashboard() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -125,10 +168,7 @@ export default function AdminDashboard() {
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        
-        // Assuming school names are in the first column
         const schoolNames = data.map((row: any) => row[0]).filter(Boolean);
-        
         if (schoolNames.length > 0) {
           const res = await fetch('/api/admin/schools/import', {
             method: 'POST',
@@ -146,10 +186,59 @@ export default function AdminDashboard() {
       }
     };
     reader.readAsBinaryString(file);
-    // Reset input
     if (e.target) e.target.value = '';
   };
 
+  // --- Form Builder ---
+  const addQuestion = () => {
+    setFormConfig({
+      ...formConfig,
+      questions: [...formConfig.questions, { title: 'سؤال جديد', type: 'text', is_required: false }]
+    });
+  };
+
+  const updateQuestion = (index: number, field: keyof Question, value: any) => {
+    const newQs = [...formConfig.questions];
+    newQs[index] = { ...newQs[index], [field]: value };
+    setFormConfig({ ...formConfig, questions: newQs });
+  };
+
+  const removeQuestion = (index: number) => {
+    const newQs = [...formConfig.questions];
+    newQs.splice(index, 1);
+    setFormConfig({ ...formConfig, questions: newQs });
+  };
+
+  const moveQuestion = (index: number, dir: number) => {
+    if (index + dir < 0 || index + dir >= formConfig.questions.length) return;
+    const newQs = [...formConfig.questions];
+    const temp = newQs[index];
+    newQs[index] = newQs[index + dir];
+    newQs[index + dir] = temp;
+    setFormConfig({ ...formConfig, questions: newQs });
+  };
+
+  const saveForm = async () => {
+    setSavingForm(true);
+    try {
+      const res = await fetch('/api/admin/form', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formConfig)
+      });
+      if (res.ok) {
+        alert('تم حفظ النموذج بنجاح');
+        fetchData();
+      }
+    } catch (error) {
+      console.error(error);
+      alert('حدث خطأ أثناء الحفظ');
+    } finally {
+      setSavingForm(false);
+    }
+  };
+
+  // --- Exports ---
   const exportToPDF = async () => {
     if (!infographicRef.current) return;
     try {
@@ -158,36 +247,22 @@ export default function AdminDashboard() {
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`تقرير_الدوام_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+      pdf.save(`تقرير_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
     } catch (error) {
       console.error('Error generating PDF:', error);
     }
   };
 
   const exportToExcel = () => {
-    if (!stats) return;
-    
-    const data = [
-      ['تقرير الدوام اليومي وحالة الدوام'],
-      ['اليوم والتاريخ', format(new Date(), 'yyyy-MM-dd')],
-      [],
-      ['المؤشر', 'القيمة'],
-      ['إجمالي المدارس', stats.total_schools],
-      ['المدارس الملتزمة بالتعبئة', stats.submitted_schools],
-      ['نسبة الالتزام بالتعبئة (%)', stats.commitment_percentage],
-      ['إجمالي المعلمين', stats.total_teachers],
-      ['نسبة التزام المعلمين (%)', stats.teacher_attendance_percentage],
-      ['إجمالي الطلبة', stats.total_students],
-      ['نسبة حضور الطلبة (%)', stats.student_attendance_percentage],
-      ['إجمالي الحصص المنفذة', stats.total_classes]
-    ];
-
-    const ws = XLSX.utils.aoa_to_sheet(data);
+    if (!stats || !stats.excel_data || stats.excel_data.length === 0) {
+      alert('لا توجد بيانات للتصدير');
+      return;
+    }
+    const ws = XLSX.utils.json_to_sheet(stats.excel_data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'التقرير');
-    XLSX.writeFile(wb, `تقرير_الدوام_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, 'الردود');
+    XLSX.writeFile(wb, `ردود_النموذج_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
   if (loading) {
@@ -217,7 +292,7 @@ export default function AdminDashboard() {
       </header>
 
       <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
-        <div className="flex gap-4 mb-8">
+        <div className="flex flex-wrap gap-4 mb-8">
           <button
             onClick={() => setActiveTab('reports')}
             className={`flex items-center gap-2 px-6 py-3 rounded-full text-sm font-medium transition-colors ${
@@ -228,6 +303,17 @@ export default function AdminDashboard() {
           >
             <BarChart3 className="w-4 h-4" />
             التقارير والإنفوغرافيك
+          </button>
+          <button
+            onClick={() => setActiveTab('form')}
+            className={`flex items-center gap-2 px-6 py-3 rounded-full text-sm font-medium transition-colors ${
+              activeTab === 'form' 
+                ? 'bg-indigo-600 text-white shadow-sm' 
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <FileEdit className="w-4 h-4" />
+            إدارة النموذج (Forms)
           </button>
           <button
             onClick={() => setActiveTab('schools')}
@@ -242,6 +328,7 @@ export default function AdminDashboard() {
           </button>
         </div>
 
+        {/* --- REPORTS TAB --- */}
         {activeTab === 'reports' && stats && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="flex justify-end gap-4">
@@ -250,7 +337,7 @@ export default function AdminDashboard() {
                 className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm"
               >
                 <FileSpreadsheet className="w-4 h-4" />
-                تصدير إكسل
+                تصدير الردود (إكسل)
               </button>
               <button
                 onClick={exportToPDF}
@@ -265,14 +352,13 @@ export default function AdminDashboard() {
               ref={infographicRef}
               className="bg-white rounded-3xl p-10 shadow-sm border border-slate-200 relative overflow-hidden"
             >
-              {/* Decorative background elements */}
               <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-50 rounded-full -mr-32 -mt-32 opacity-50"></div>
               <div className="absolute bottom-0 left-0 w-80 h-80 bg-emerald-50 rounded-full -ml-40 -mb-40 opacity-50"></div>
               
               <div className="relative z-10">
                 <div className="text-center mb-12 border-b border-slate-100 pb-8">
                   <h1 className="text-3xl font-bold text-slate-800 mb-3">مديرية التربية والتعليم / طولكرم</h1>
-                  <h2 className="text-xl font-semibold text-indigo-600 mb-2">تقرير الدوام اليومي وحالة الدوام</h2>
+                  <h2 className="text-xl font-semibold text-indigo-600 mb-2">{stats.form_title || 'تقرير الدوام اليومي'}</h2>
                   <p className="text-slate-500 font-medium">{format(new Date(), 'yyyy/MM/dd')}</p>
                 </div>
                 
@@ -289,44 +375,160 @@ export default function AdminDashboard() {
                     </div>
                   </div>
 
-                  {/* Student Attendance */}
-                  <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-6 text-white shadow-md transform hover:scale-105 transition-transform">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-emerald-100 font-medium">نسبة حضور الطلبة</h3>
-                      <Users className="w-6 h-6 text-emerald-200" />
+                  {/* Dynamic Number Stats */}
+                  {stats.number_stats.map((stat, idx) => (
+                    <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-center items-center text-center transform hover:scale-105 transition-transform">
+                      <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center mb-4">
+                        <BarChart3 className="w-6 h-6 text-slate-600" />
+                      </div>
+                      <h3 className="text-slate-500 font-medium mb-1">{stat.title}</h3>
+                      <div className="text-3xl font-bold text-slate-800">{stat.sum.toLocaleString()}</div>
                     </div>
-                    <div className="text-4xl font-bold">{stats.student_attendance_percentage}%</div>
-                    <div className="text-sm text-emerald-200 mt-2">
-                      إجمالي الطلبة: {stats.total_students.toLocaleString()}
-                    </div>
-                  </div>
-
-                  {/* Teacher Attendance */}
-                  <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl p-6 text-white shadow-md transform hover:scale-105 transition-transform">
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-blue-100 font-medium">نسبة التزام المعلمين</h3>
-                      <Users className="w-6 h-6 text-blue-200" />
-                    </div>
-                    <div className="text-4xl font-bold">{stats.teacher_attendance_percentage}%</div>
-                    <div className="text-sm text-blue-200 mt-2">
-                      إجمالي المعلمين: {stats.total_teachers.toLocaleString()}
-                    </div>
-                  </div>
-
-                  {/* Total Classes */}
-                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col justify-center items-center text-center">
-                    <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center mb-4">
-                      <BookOpen className="w-6 h-6 text-amber-600" />
-                    </div>
-                    <h3 className="text-slate-500 font-medium mb-1">إجمالي الحصص المنفذة</h3>
-                    <div className="text-3xl font-bold text-slate-800">{stats.total_classes.toLocaleString()}</div>
-                  </div>
+                  ))}
                 </div>
               </div>
             </div>
           </div>
         )}
 
+        {/* --- FORM BUILDER TAB --- */}
+        {activeTab === 'form' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200">
+              <div className="flex justify-between items-center mb-8 border-b border-slate-100 pb-6">
+                <h2 className="text-2xl font-bold text-slate-800">إعدادات النموذج</h2>
+                <button
+                  onClick={saveForm}
+                  disabled={savingForm}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-medium transition-colors disabled:opacity-70"
+                >
+                  {savingForm ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div> : <Save className="w-5 h-5" />}
+                  حفظ النموذج
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">عنوان النموذج</label>
+                  <input
+                    type="text"
+                    value={formConfig.title}
+                    onChange={(e) => setFormConfig({...formConfig, title: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">وصف النموذج (اختياري)</label>
+                  <input
+                    type="text"
+                    value={formConfig.description}
+                    onChange={(e) => setFormConfig({...formConfig, description: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">تاريخ ووقت البدء (اختياري)</label>
+                  <input
+                    type="datetime-local"
+                    value={formConfig.start_time}
+                    onChange={(e) => setFormConfig({...formConfig, start_time: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">تاريخ ووقت الانتهاء (اختياري)</label>
+                  <input
+                    type="datetime-local"
+                    value={formConfig.end_time}
+                    onChange={(e) => setFormConfig({...formConfig, end_time: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-bold text-slate-800">الأسئلة والحقول</h3>
+                  <button
+                    onClick={addQuestion}
+                    className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    إضافة سؤال
+                  </button>
+                </div>
+
+                {formConfig.questions.map((q, idx) => (
+                  <div key={idx} className="bg-slate-50 border border-slate-200 rounded-2xl p-6 relative group">
+                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => moveQuestion(idx, -1)} className="p-1.5 bg-white rounded shadow-sm text-slate-400 hover:text-indigo-600" disabled={idx === 0}>↑</button>
+                      <button onClick={() => moveQuestion(idx, 1)} className="p-1.5 bg-white rounded shadow-sm text-slate-400 hover:text-indigo-600" disabled={idx === formConfig.questions.length - 1}>↓</button>
+                      <button onClick={() => removeQuestion(idx)} className="p-1.5 bg-white rounded shadow-sm text-slate-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                      <div className="md:col-span-6 space-y-2">
+                        <label className="block text-xs font-medium text-slate-500">نص السؤال</label>
+                        <input
+                          type="text"
+                          value={q.title}
+                          onChange={(e) => updateQuestion(idx, 'title', e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-indigo-500 outline-none"
+                        />
+                      </div>
+                      <div className="md:col-span-3 space-y-2">
+                        <label className="block text-xs font-medium text-slate-500">نوع الإجابة</label>
+                        <select
+                          value={q.type}
+                          onChange={(e) => updateQuestion(idx, 'type', e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-indigo-500 outline-none bg-white"
+                        >
+                          <option value="text">نص قصير</option>
+                          <option value="textarea">نص طويل</option>
+                          <option value="number">رقم (يظهر في الإحصائيات)</option>
+                          <option value="date">تاريخ</option>
+                          <option value="select">قائمة منسدلة</option>
+                        </select>
+                      </div>
+                      <div className="md:col-span-3 flex items-center pt-6">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={q.is_required}
+                            onChange={(e) => updateQuestion(idx, 'is_required', e.target.checked)}
+                            className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700">مطلوب (إجباري)</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {q.type === 'select' && (
+                      <div className="mt-4 space-y-2">
+                        <label className="block text-xs font-medium text-slate-500">الخيارات (مفصولة بفاصلة)</label>
+                        <input
+                          type="text"
+                          value={q.options?.join('، ') || ''}
+                          onChange={(e) => updateQuestion(idx, 'options', e.target.value.split('،').map(s => s.trim()).filter(Boolean))}
+                          placeholder="مثال: وجاهي، إلكتروني، مدمج"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-indigo-500 outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ))}
+                
+                {formConfig.questions.length === 0 && (
+                  <div className="text-center py-12 text-slate-500 border-2 border-dashed border-slate-200 rounded-2xl">
+                    لا توجد أسئلة في هذا النموذج. اضغط على "إضافة سؤال" للبدء.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- SCHOOLS TAB --- */}
         {activeTab === 'schools' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200">
