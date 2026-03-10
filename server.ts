@@ -307,10 +307,10 @@ async function startServer() {
     const totalSchools = db.prepare('SELECT COUNT(*) as c FROM schools').get() as { c: number };
     const submittedSchools = db.prepare('SELECT COUNT(*) as c FROM form_responses WHERE form_id = ?').get(formId) as { c: number };
     
-    const numberQuestions = db.prepare('SELECT id, title FROM form_questions WHERE form_id = ? AND type = "number" ORDER BY order_index').all(formId) as {id:number, title:string}[];
+    const numberQuestions = db.prepare('SELECT id, title FROM form_questions WHERE form_id = ? AND type = \'number\' ORDER BY order_index').all(formId) as {id:number, title:string}[];
     
     const number_stats = numberQuestions.map(q => {
-      const sum = db.prepare('SELECT SUM(CAST(answer_value AS numeric)) as s FROM form_answers fa JOIN form_responses fr ON fa.response_id = fr.id WHERE fr.form_id = ? AND fa.question_id = ?').get(formId, q.id) as { s: number };
+      const sum = db.prepare('SELECT SUM(CAST(answer_value AS REAL)) as s FROM form_answers fa JOIN form_responses fr ON fa.response_id = fr.id WHERE fr.form_id = ? AND fa.question_id = ?').get(formId, q.id) as { s: number };
       return { title: q.title, sum: sum.s || 0 };
     });
 
