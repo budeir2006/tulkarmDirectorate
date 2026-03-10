@@ -52,6 +52,11 @@ db.exec(`
     FOREIGN KEY(response_id) REFERENCES form_responses(id) ON DELETE CASCADE,
     FOREIGN KEY(question_id) REFERENCES form_questions(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS admin_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Seed default form if not exists
@@ -152,13 +157,44 @@ async function startServer() {
     }
   });
 
+  // Admin check status
+  app.get('/api/admin/status', (req, res) => {
+    const row = db.prepare('SELECT value FROM admin_settings WHERE key = ?').get('password') as { value: string } | undefined;
+    res.json({ hasPassword: !!row });
+  });
+
   // Admin login
   app.post('/api/admin/login', (req, res) => {
     const { password } = req.body;
-    if (password === '0000') {
+    const row = db.prepare('SELECT value FROM admin_settings WHERE key = ?').get('password') as { value: string } | undefined;
+    
+    if (!row) {
+      // No password set, allow login without password
+      res.json({ success: true, token: 'fake-jwt-token-for-demo' });
+    } else if (password === row.value) {
       res.json({ success: true, token: 'fake-jwt-token-for-demo' });
     } else {
       res.status(401).json({ error: 'كلمة المرور غير صحيحة' });
+    }
+  });
+
+  // Admin set/change password
+  app.post('/api/admin/password', (req, res) => {
+    const { oldPassword, newPassword } = req.body;
+    const row = db.prepare('SELECT value FROM admin_settings WHERE key = ?').get('password') as { value: string } | undefined;
+    
+    if (!row) {
+      // Set for the first time
+      db.prepare('INSERT INTO admin_settings (key, value) VALUES (?, ?)').run('password', newPassword);
+      res.json({ success: true });
+    } else {
+      // Change password
+      if (oldPassword === row.value) {
+        db.prepare('UPDATE admin_settings SET value = ? WHERE key = ?').run(newPassword, 'password');
+        res.json({ success: true });
+      } else {
+        res.status(401).json({ error: 'كلمة المرور الحالية غير صحيحة' });
+      }
     }
   });
 

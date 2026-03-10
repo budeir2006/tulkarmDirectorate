@@ -40,7 +40,7 @@ interface FormConfig {
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'reports' | 'schools' | 'form'>('reports');
+  const [activeTab, setActiveTab] = useState<'reports' | 'schools' | 'form' | 'settings'>('reports');
   const [schools, setSchools] = useState<School[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +57,12 @@ export default function AdminDashboard() {
     questions: []
   });
   const [savingForm, setSavingForm] = useState(false);
+
+  // Settings State
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [settingsMessage, setSettingsMessage] = useState({ type: '', text: '' });
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('admin_token');
@@ -98,6 +104,11 @@ export default function AdminDashboard() {
           }))
         });
       }
+
+      const statusRes = await fetch('/api/admin/status');
+      const statusData = await statusRes.json();
+      setHasPassword(statusData.hasPassword);
+
     } catch (error) {
       console.error(error);
     } finally {
@@ -265,6 +276,32 @@ export default function AdminDashboard() {
     XLSX.writeFile(wb, `ردود_النموذج_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
+  const handleSavePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsMessage({ type: '', text: '' });
+    
+    try {
+      const res = await fetch('/api/admin/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPassword, newPassword })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        setSettingsMessage({ type: 'success', text: 'تم حفظ كلمة المرور بنجاح' });
+        setOldPassword('');
+        setNewPassword('');
+        setHasPassword(true);
+      } else {
+        setSettingsMessage({ type: 'error', text: data.error || 'فشل حفظ كلمة المرور' });
+      }
+    } catch (err) {
+      setSettingsMessage({ type: 'error', text: 'حدث خطأ أثناء الاتصال بالخادم' });
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex justify-center items-center bg-slate-50">
@@ -325,6 +362,17 @@ export default function AdminDashboard() {
           >
             <Building2 className="w-4 h-4" />
             إدارة المدارس
+          </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`flex items-center gap-2 px-6 py-3 rounded-full text-sm font-medium transition-colors ${
+              activeTab === 'settings' 
+                ? 'bg-indigo-600 text-white shadow-sm' 
+                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Settings className="w-4 h-4" />
+            الإعدادات
           </button>
         </div>
 
@@ -636,6 +684,62 @@ export default function AdminDashboard() {
                   لا توجد مدارس مضافة حالياً
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* --- SETTINGS TAB --- */}
+        {activeTab === 'settings' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 max-w-2xl mx-auto">
+              <div className="mb-8 border-b border-slate-100 pb-6">
+                <h2 className="text-2xl font-bold text-slate-800">إعدادات الأمان</h2>
+                <p className="text-slate-500 mt-2">
+                  {hasPassword ? 'تغيير كلمة مرور المسؤول' : 'تعيين كلمة مرور للمسؤول لأول مرة'}
+                </p>
+              </div>
+
+              <form onSubmit={handleSavePassword} className="space-y-6">
+                {hasPassword && (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-slate-700">كلمة المرور الحالية</label>
+                    <input
+                      type="password"
+                      required
+                      value={oldPassword}
+                      onChange={(e) => setOldPassword(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-left"
+                      dir="ltr"
+                    />
+                  </div>
+                )}
+                
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">كلمة المرور الجديدة</label>
+                  <input
+                    type="password"
+                    required
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-left"
+                    dir="ltr"
+                  />
+                </div>
+
+                {settingsMessage.text && (
+                  <div className={`p-4 rounded-xl text-sm ${settingsMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                    {settingsMessage.text}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-6 rounded-xl transition-colors"
+                >
+                  <Save className="w-5 h-5" />
+                  حفظ كلمة المرور
+                </button>
+              </form>
             </div>
           </div>
         )}
