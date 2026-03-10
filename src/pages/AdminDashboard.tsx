@@ -59,10 +59,9 @@ export default function AdminDashboard() {
   const [savingForm, setSavingForm] = useState(false);
 
   // Settings State
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [settingsMessage, setSettingsMessage] = useState({ type: '', text: '' });
-  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordMessage, setPasswordMessage] = useState({ type: '', text: '' });
+  const [savingPassword, setSavingPassword] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('admin_token');
@@ -104,11 +103,6 @@ export default function AdminDashboard() {
           }))
         });
       }
-
-      const statusRes = await fetch('/api/admin/status');
-      const statusData = await statusRes.json();
-      setHasPassword(statusData.hasPassword);
-
     } catch (error) {
       console.error(error);
     } finally {
@@ -249,6 +243,43 @@ export default function AdminDashboard() {
     }
   };
 
+  // --- Settings ---
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordMessage({ type: 'error', text: 'كلمة المرور الجديدة غير متطابقة' });
+      return;
+    }
+    if (passwordForm.newPassword.length < 4) {
+      setPasswordMessage({ type: 'error', text: 'كلمة المرور يجب أن تكون 4 أحرف على الأقل' });
+      return;
+    }
+
+    setSavingPassword(true);
+    setPasswordMessage({ type: '', text: '' });
+    try {
+      const res = await fetch('/api/admin/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword: passwordForm.currentPassword,
+          newPassword: passwordForm.newPassword
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPasswordMessage({ type: 'success', text: 'تم تحديث كلمة المرور بنجاح' });
+        setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      } else {
+        setPasswordMessage({ type: 'error', text: data.error || 'حدث خطأ أثناء تحديث كلمة المرور' });
+      }
+    } catch (error) {
+      setPasswordMessage({ type: 'error', text: 'حدث خطأ في الاتصال' });
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
   // --- Exports ---
   const exportToPDF = async () => {
     if (!infographicRef.current) return;
@@ -274,32 +305,6 @@ export default function AdminDashboard() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'الردود');
     XLSX.writeFile(wb, `ردود_النموذج_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
-  };
-
-  const handleSavePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSettingsMessage({ type: '', text: '' });
-    
-    try {
-      const res = await fetch('/api/admin/password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPassword, newPassword })
-      });
-      
-      const data = await res.json();
-      
-      if (res.ok && data.success) {
-        setSettingsMessage({ type: 'success', text: 'تم حفظ كلمة المرور بنجاح' });
-        setOldPassword('');
-        setNewPassword('');
-        setHasPassword(true);
-      } else {
-        setSettingsMessage({ type: 'error', text: data.error || 'فشل حفظ كلمة المرور' });
-      }
-    } catch (err) {
-      setSettingsMessage({ type: 'error', text: 'حدث خطأ أثناء الاتصال بالخادم' });
-    }
   };
 
   if (loading) {
@@ -691,54 +696,64 @@ export default function AdminDashboard() {
         {/* --- SETTINGS TAB --- */}
         {activeTab === 'settings' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 max-w-2xl mx-auto">
+            <div className="bg-white rounded-3xl p-8 shadow-sm border border-slate-200 max-w-2xl">
               <div className="mb-8 border-b border-slate-100 pb-6">
-                <h2 className="text-2xl font-bold text-slate-800">إعدادات الأمان</h2>
-                <p className="text-slate-500 mt-2">
-                  {hasPassword ? 'تغيير كلمة مرور المسؤول' : 'تعيين كلمة مرور للمسؤول لأول مرة'}
-                </p>
+                <h2 className="text-2xl font-bold text-slate-800">إعدادات الحساب</h2>
+                <p className="text-slate-500 mt-2">تغيير كلمة المرور الخاصة بلوحة المسؤول</p>
               </div>
 
-              <form onSubmit={handleSavePassword} className="space-y-6">
-                {hasPassword && (
-                  <div className="space-y-2">
-                    <label className="block text-sm font-medium text-slate-700">كلمة المرور الحالية</label>
-                    <input
-                      type="password"
-                      required
-                      value={oldPassword}
-                      onChange={(e) => setOldPassword(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-left"
-                      dir="ltr"
-                    />
+              <form onSubmit={handleUpdatePassword} className="space-y-6">
+                {passwordMessage.text && (
+                  <div className={`p-4 rounded-xl text-sm font-medium ${
+                    passwordMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-700 border border-red-200'
+                  }`}>
+                    {passwordMessage.text}
                   </div>
                 )}
+
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">كلمة المرور الحالية</label>
+                  <input
+                    type="password"
+                    required
+                    value={passwordForm.currentPassword}
+                    onChange={(e) => setPasswordForm({...passwordForm, currentPassword: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+                  />
+                </div>
                 
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-slate-700">كلمة المرور الجديدة</label>
                   <input
                     type="password"
                     required
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all text-left"
-                    dir="ltr"
+                    value={passwordForm.newPassword}
+                    onChange={(e) => setPasswordForm({...passwordForm, newPassword: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">تأكيد كلمة المرور الجديدة</label>
+                  <input
+                    type="password"
+                    required
+                    value={passwordForm.confirmPassword}
+                    onChange={(e) => setPasswordForm({...passwordForm, confirmPassword: e.target.value})}
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
                   />
                 </div>
 
-                {settingsMessage.text && (
-                  <div className={`p-4 rounded-xl text-sm ${settingsMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                    {settingsMessage.text}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-6 rounded-xl transition-colors"
-                >
-                  <Save className="w-5 h-5" />
-                  حفظ كلمة المرور
-                </button>
+                <div className="pt-4">
+                  <button
+                    type="submit"
+                    disabled={savingPassword}
+                    className="flex items-center justify-center gap-2 w-full bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-medium transition-colors disabled:opacity-70"
+                  >
+                    {savingPassword ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div> : <Save className="w-5 h-5" />}
+                    حفظ كلمة المرور
+                  </button>
+                </div>
               </form>
             </div>
           </div>
